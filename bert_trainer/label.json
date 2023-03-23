@@ -1,0 +1,8 @@
+{
+    "urls" : {
+        "contact": ["contact", "contacten"],
+        "about": [""],
+        "financials": [""],
+        "governance": [""]
+    }
+}
