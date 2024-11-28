@@ -1,52 +1,25 @@
 from urllib.parse import urlparse
-import re
+from pathlib import Path
 import os
+import re
 
-current_dir = os.path.dirname(__file__)
-os.chdir(current_dir)
+# Get the current file's path
+current_path = Path(__file__).resolve()
+parent_dir = current_path.parent
+
+os.chdir(parent_dir)
 
 with open("blacklist.txt", "r") as f_in:
-    black_list = [l.strip().lower() for l in f_in.readlines()]
+    black_list = [l.lower().strip().lower() for l in f_in.readlines()]
 
+with open("whitelist.txt", "r") as f_in:
+    white_list = [l.lower().strip().lower() for l in f_in.readlines()]
 
-about_us_patterns =   [
-                            r"about",
-                            r"who",
-                            r"why",
-                            r"profile",
-                            r"product",
-                            r"brand",
-                            r"merk",
-                            r"over",
-                            r"our",
-                            r"this.is",
-                            r"wie.*zijn",
-                            r"wie.*is",
-                            r"wat.we.doen",
-                            r"what.we.do",
-                            r"a.propos",
-                            r"à.propos",
-                            r"bedrijf",
-                            r"company",
-                            r"coöperatie",
-                            r"organisatie",
-                            r"corporate",
-                            r"index",
-                            r"home",
-                            r"/(en|nl|fr|de)$",
-                        ]
-
-
-
-
-# for domians if href.count(".")>=2 (has to be >=2 and not ==2 because of .com.br/co.uk/.co.id/etc this examples should be skipped also) and "www" not in href -> create an additional www.domain.com and at the end delete all duplicates
-
-### skip if cloudfare found in text
-### /// skip urls  class contains cookie
 def clean_url(url: str):
     """
     Keeps scheme (protocol) and domain of URL
     """
+    url = re.sub(r":\d+$", "", url)
     scheme = urlparse(url).scheme
     domain = urlparse(url).netloc
     return f"{scheme}://{domain}"
@@ -68,7 +41,6 @@ def fix_href(domain: str, href: str):
         Skipping depeer than children url. be sure that first scraper (from DuckGoGo) only takes clean domain scheme
         ## wrong it can be domain.com/en/... need to work more here
     """
-    href = re.sub(r"[()]", "", href)
     if href.startswith("/"):
         return domain + href
     elif href.lower().startswith("http"):
@@ -84,34 +56,20 @@ def check_blacklist(href: str):
     """
     True if blacklisted, false otherwise
     """
-    if any([True if re.search(pattern, href.lower()) is not None else False for pattern in black_list]):#This should be to delete the duckduckgo blacklist urls
+    if any([re.search(l, href.lower()) for l in black_list]):#This should  delete the duckduckgo blacklisted urls
         return True
     return False
 
-def regex_find_urls(html):
+def check_whitelist(href: str):
     """
-    Finding urls when the start page is javascript and the site body could not be (fully) rendered
+    True if whitelisted, false otherwise
+    there should´t be overlapping patterns since we will reduce to one per pattern maximum
     """
-    regex_hrefs = re.findall(r"href=\".*?\"", html)
-    regex_hrefs = [h.replace("href=", "").replace("\"", "") for h in regex_hrefs]
-    other_urls  = [h for h in re.findall(r"http[^\" ]+", html) if h not in regex_hrefs]
-    total_urls = [re.sub(r"[()]", "", h).strip() for h in regex_hrefs + other_urls]
-    total_urls = [h for h in total_urls if len(h.replace("/", "").strip()) > 0]
-    return total_urls
-
-def similar_urls(url1: str, url2: str) -> str:
-    """
-    Asserting that two urls are different (to fix issue with https://www.afga.com containing similar url (https://www.afga.com/) at its landing page)
-    """
-    url1 = re.sub(r"https?://", "", url1).strip().lower()
-    url1 = re.sub(r"/$", "", url1).strip()
-    url2 = re.sub(r"https?://", "", url2).strip().lower()
-    url2 = re.sub(r"/$", "", url2).strip()
-    if url1 == url2:
+    if any([re.search(l, href.lower()) for l in white_list]):
         return True
     return False
 
-def valid_url(domain: str, href:str) -> str :
+def valid_url(domain: str, href: str) -> str:
     """
     This functions checks if the domain and href are.....
 
@@ -122,49 +80,53 @@ def valid_url(domain: str, href:str) -> str :
     Returns:
         False if invalid URL
     """
-    if not href.isalpha() and len(href) == 1: # to exclude hrefs like "/", "#", etc.
-        return False
-    if "#" in href or "?" in href: #returning False when "?" could be too strict
-        return False 
     if check_blacklist(href):
+        #print("-*-*-*black", href)
         return False
-    if similar_urls(domain, href):
+    elif href.lower().startswith("http") and get_domain(domain.lower()) not in href.lower():
+        #print("-*-*-*error2", domain, href)
         return False
-    if href.startswith(domain) and len(href) - len(domain) < 2:
-        return False
-    if href.lower().startswith("http") and get_domain(domain.lower()) not in href.lower():
-        return False
-    if "javascript" in href.lower() and "http" not in href.lower() or  (href.lower().startswith("http") and "://" not in href) or href.startswith("#"):
+    elif "javascript" in href.lower() and "http" not in href.lower() or  (href.lower().startswith("http") and "://" not in href) or href.startswith("#"):
+        #print("error3", href)
         return False
     return fix_href(domain, href)
 
 
-def get_about_us(domain, results):
+def prune_urls(domain, anchors, max_len=25):
     """
+    Pending
     """
-    for r in results:
-        print("r", r)
-        if any([True if re.search(r, p) else False for p in about_us_patterns]):
-            return valid_url(domain, r)
-    return None #=> False
+    anchors_fixed = list()
+    anchors_wl = list()
+    anchors_to_validate = list()
+    temp_wl = dict()
+    temp_hrefs = set()
 
-
-def reduce_results(results):
-    """
-    """
-    if type(results) is not list or len(results) <= 100:
-        return results
-    results_dict = dict()
-    for res in results:
-        res_count = re.sub(r"https?://", "", res).count("/") # counting how many "/" excluding the http/https protocol slashes
-        if res_count not in results_dict:
-            results_dict[res_count] = [res]
-        else:
-            results_dict[res_count].append(res)
-    new_results = list()
-    for rc in results_dict:
-        previous = len(new_results)
-        if previous >= 100:
-            break
-        new_results.extend(results_dict[rc][:100-previous])  #adding only until 100
-    return new_results
+    for a in anchors:
+        if not check_blacklist(href=a["href"]) and len(a["href"].split("?")[0]) > 0:
+            a["href"] = fix_href(domain=domain, href=a["href"].split("?")[0])
+            anchors_fixed.append(a)
+    #make for loop for each white list and add to dict, if the same url is there, replace only if less / than curret value to whitelistk key
+    #for wl in white_list:
+    #    for a 
+    for a in anchors_fixed:
+        if a["href"] not in temp_hrefs and check_whitelist(href=a["href"]): ### FIX HERE TO REDUCE WHEN MULTIPLE OVER ONS or CONTACT
+            temp_hrefs.add(a["href"])
+            anchors_wl.append(a)
+        elif a["href"] not in temp_hrefs:
+            temp_hrefs.add(a["href"])
+            anchors_to_validate.append(a)
+    for wl in white_list:
+        for a in anchors_wl:
+            if wl not in temp_wl:
+                temp_wl[wl] = a
+            else:
+                if temp_wl[wl]["href"].count("/") > a["href"].count("/"):
+                    temp_wl[wl] = a #keeping lowest count of "/" per white list pattern
+    anchors_final = list(temp_wl.values())
+    for a in anchors_to_validate:
+        if valid_url(domain, a["href"]) and len(anchors_final) < max_len:
+            anchors_final.append(a)
+        #else:
+        #    print("failed to validate", domain, a["href"])
+    return sorted(anchors_final, key=lambda a: a["href"].count("/"))[:max_len]
